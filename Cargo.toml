@@ -1,0 +1,22 @@
+[package]
+authors = ["kilic <kiliconu@itu.edu.tr>"]
+edition = "2021"
+name = "logupgate"
+version = "0.1.0"
+
+[dependencies]
+halo2 = {package = "halo2_proofs", git = "https://github.com/privacy-scaling-explorations/halo2", features = ["circuit-params"]}
+num-bigint = {version = "0.4", features = ["rand"]}
+num-integer = "0.1"
+num-traits = "0.2"
+# halo2 = { package = "halo2_proofs", path = "../halo2/halo2_proofs" }
+ff = "0.13"
+group = "0.13"
+subtle = {version = "2.3", default-features = false}
+
+[features]
+default = ["prover-sanity", "synth-sanity"]
+dev-sanity = []
+info = []
+prover-sanity = []
+synth-sanity = []
