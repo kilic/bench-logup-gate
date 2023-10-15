@@ -18,19 +18,19 @@ struct Params {
 }
 
 #[derive(Clone, Debug)]
-struct TestConfig<F: PrimeField + Ord, const K: usize> {
-    logup_gate: LogupGate<F, K>,
+struct TestConfig<F: PrimeField + Ord, const W: usize> {
+    logup_gate: LogupGate<F, W>,
 }
 
 #[derive(Debug, Default)]
-struct TestCircuit<F: PrimeField + Ord, const K: usize> {
+struct TestCircuit<F: PrimeField + Ord, const W: usize> {
     _marker: PhantomData<F>,
     bit_size: usize,
     number_of_lookups: usize,
 }
 
-impl<F: PrimeField + Ord, const K: usize> Circuit<F> for TestCircuit<F, K> {
-    type Config = TestConfig<F, K>;
+impl<F: PrimeField + Ord, const W: usize> Circuit<F> for TestCircuit<F, W> {
+    type Config = TestConfig<F, W>;
     type FloorPlanner = V1;
     type Params = Params;
 
@@ -55,13 +55,22 @@ impl<F: PrimeField + Ord, const K: usize> Circuit<F> for TestCircuit<F, K> {
         let table_size = 1 << self.bit_size;
 
         let w = (0..self.number_of_lookups as u64)
-            .map(|_| OsRng.gen_range(0..table_size as u64))
+            .map(|_| {
+                //
+                let w: [Value<F>; W] = std::iter::repeat_with(|| {
+                    let w = OsRng.gen_range(0..table_size as u64);
+                    let w = F::from(w);
+                    Value::known(w)
+                })
+                .take(W)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
+                w
+            })
             .collect::<Vec<_>>();
 
-        let w = w.into_iter().map(F::from).collect::<Vec<_>>();
-
-        w.iter()
-            .for_each(|w| cfg.logup_gate.lookup(Value::known(*w)));
+        w.iter().for_each(|w| cfg.logup_gate.lookup(w));
 
         cfg.logup_gate.layout(&mut ly)?;
 
@@ -79,9 +88,10 @@ impl<F: PrimeField + Ord, const K: usize> Circuit<F> for TestCircuit<F, K> {
 fn test_logup() {
     use halo2::halo2curves::pasta::Fq;
     const K: usize = 4;
+    const W: usize = 10;
     let bit_size = 3;
 
-    let circuit = TestCircuit::<Fq, K> {
+    let circuit = TestCircuit::<Fq, W> {
         _marker: PhantomData,
         bit_size,
         number_of_lookups: 9,

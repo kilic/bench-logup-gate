@@ -15,17 +15,23 @@ fn _debug_assigned<F: PrimeField>(desc: &str, e: &[Value<Assigned<F>>]) {
 }
 
 #[derive(Clone, Debug)]
-pub struct LogupGate<F: PrimeField + Ord, const K: usize> {
-    pub cfg: LogupConfig<F>,
+pub struct LogupGate<F: PrimeField + Ord, const W: usize> {
+    pub cfg: LogupConfig<F, W>,
     bit_size: usize,
     multiplicities: BTreeMap<F, usize>,
-    witnesses: Vec<Value<F>>,
+    witnesses: Vec<[Value<F>; W]>,
 }
 
-impl<F: PrimeField + Ord, const K: usize> LogupGate<F, K> {
+impl<F: PrimeField + Ord, const W: usize> LogupGate<F, W> {
     pub fn configure(meta: &mut ConstraintSystem<F>, bit_size: usize) -> Self {
-        let w = meta.advice_column();
-        let cfg = LogupConfig::configure(meta, w);
+        let w = std::iter::repeat_with(|| meta.advice_column())
+            .take(W)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let cfg = LogupConfig::configure(meta, &w);
+
         Self {
             cfg,
             bit_size,
@@ -34,13 +40,15 @@ impl<F: PrimeField + Ord, const K: usize> LogupGate<F, K> {
         }
     }
 
-    pub fn lookup(&mut self, value: Value<F>) {
-        self.witnesses.push(value);
-        value.map(|value| {
-            self.multiplicities
-                .entry(value)
-                .and_modify(|e| *e += 1)
-                .or_insert(1);
+    pub fn lookup(&mut self, value: &[Value<F>; W]) {
+        self.witnesses.push(*value);
+        value.iter().for_each(|value| {
+            value.map(|value| {
+                self.multiplicities
+                    .entry(value)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1);
+            });
         });
     }
 
@@ -51,17 +59,23 @@ impl<F: PrimeField + Ord, const K: usize> LogupGate<F, K> {
     ) -> Result<(), Error> {
         let alpha: Value<F> = ly.get_challenge(self.cfg.alpha);
 
-        // find range table
-        assert!(K > self.bit_size, "so table can fit in the region");
         let table = (0..1 << self.bit_size).map(F::from).collect::<Vec<_>>();
 
         // find witness helpers
-        let w_helper = self
+        let w_helper: Vec<[Value<Assigned<F>>; W]> = self
             .witnesses
             .iter()
             .enumerate()
-            // w_helper_i = 1 / (alpha - w_i)
-            .map(|(_i, w)| (alpha - w).map(|inv| Assigned::Rational(F::ONE, inv)))
+            .map(|(_i, w)| {
+                w.iter()
+                    .map(|w| {
+                        // w_helper_i = 1 / (alpha - w_i)
+                        (alpha - w).map(|inv| Assigned::Rational(F::ONE, inv))
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
 
         // find table helpers
@@ -136,17 +150,21 @@ impl<F: PrimeField + Ord, const K: usize> LogupGate<F, K> {
 
                     match w {
                         Some((w, h)) => {
-                            let w: Value<Assigned<F>> = (*w).into();
-                            ctx.enable(self.cfg.s_witness)?;
+                            for (i, (w, h)) in w.iter().zip(h.iter()).enumerate() {
+                                let w: Value<Assigned<F>> = (*w).into();
+                                ctx.enable(self.cfg.s_witness)?;
 
-                            ctx.advice(self.cfg.w, w)?;
-                            ctx.advice(self.cfg.w_helper, *h)?;
+                                ctx.advice(self.cfg.w[i], w)?;
+                                ctx.advice(self.cfg.w_helper[i], *h)?;
 
-                            acc = acc - h;
+                                acc = acc - h;
+                            }
                         }
                         _ => {
-                            ctx.empty(self.cfg.w.into())?;
-                            ctx.empty(self.cfg.w_helper.into())?;
+                            for i in 0..W {
+                                ctx.empty(self.cfg.w[i].into())?;
+                                ctx.empty(self.cfg.w_helper[i].into())?;
+                            }
                         }
                     }
                     ctx.next();

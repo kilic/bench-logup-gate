@@ -12,11 +12,11 @@ use std::marker::PhantomData;
 // * batch lookup
 
 #[derive(Clone, Debug)]
-pub struct LogupConfig<F: PrimeField> {
-    pub(crate) w: Column<Advice>,
+pub struct LogupConfig<F: PrimeField, const W: usize> {
+    pub(crate) w: [Column<Advice>; W],
     pub(crate) t: Column<Fixed>,
     pub(crate) t_helper: Column<Advice>,
-    pub(crate) w_helper: Column<Advice>,
+    pub(crate) w_helper: [Column<Advice>; W],
     pub(crate) m: Column<Advice>,
     pub(crate) acc: Column<Advice>,
     pub(crate) alpha: Challenge,
@@ -30,12 +30,17 @@ pub struct LogupConfig<F: PrimeField> {
     pub(crate) marker: PhantomData<F>,
 }
 
-impl<F: PrimeField> LogupConfig<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, w: Column<Advice>) -> Self {
+impl<F: PrimeField, const W: usize> LogupConfig<F, W> {
+    pub fn configure(meta: &mut ConstraintSystem<F>, w: &[Column<Advice>; W]) -> Self {
         let t = meta.fixed_column();
         let m = meta.advice_column_in(SecondPhase);
         let t_helper = meta.advice_column_in(SecondPhase);
-        let w_helper = meta.advice_column_in(SecondPhase);
+        let w_helper: [Column<Advice>; W] =
+            std::iter::repeat_with(|| meta.advice_column_in(SecondPhase))
+                .take(W)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
         let acc = meta.advice_column_in(SecondPhase);
 
         let alpha = meta.challenge_usable_after(FirstPhase);
@@ -59,13 +64,19 @@ impl<F: PrimeField> LogupConfig<F> {
 
         // w_helper(X) * (alpha - w(X)) = 1
         meta.create_gate("w-helper", |meta| {
-            let w = meta.query_advice(w, Rotation(0));
-            let w_helper = meta.query_advice(w_helper, Rotation(0));
-            let alpha = meta.query_challenge(alpha);
-            let identity = w_helper * (alpha - w) - Expression::Constant(F::ONE);
+            let identities = w
+                .iter()
+                .zip(w_helper.iter())
+                .map(|(w, w_helper)| {
+                    let w = meta.query_advice(*w, Rotation(0));
+                    let w_helper = meta.query_advice(*w_helper, Rotation(0));
+                    let alpha = meta.query_challenge(alpha);
+                    w_helper * (alpha - w) - Expression::Constant(F::ONE)
+                })
+                .collect::<Vec<_>>();
 
             let selector = meta.query_selector(s_witness);
-            Constraints::with_selector(selector, std::iter::once(identity))
+            Constraints::with_selector(selector, identities)
         });
 
         // sum(m(x) * t_helper(x) - w_helper(x)) == 0
@@ -75,8 +86,12 @@ impl<F: PrimeField> LogupConfig<F> {
             let s_witness = meta.query_selector(s_witness);
 
             let contrib = {
-                let w_helper = meta.query_advice(w_helper, Rotation(0));
+                let w_helper: Expression<F> = w_helper
+                    .iter()
+                    .map(|w_helper| meta.query_advice(*w_helper, Rotation(0)))
+                    .sum();
                 let t_helper = meta.query_advice(t_helper, Rotation(0));
+
                 // with the hope that deggree stays at 3
                 s_table * m * t_helper - s_witness * w_helper
             };
@@ -97,7 +112,7 @@ impl<F: PrimeField> LogupConfig<F> {
         });
 
         Self {
-            w,
+            w: *w,
             t,
             t_helper,
             w_helper,
