@@ -8,9 +8,6 @@ use halo2::{
 };
 use std::marker::PhantomData;
 
-// TODO:
-// * batch lookup
-
 #[derive(Clone, Debug)]
 pub struct LogupConfig<F: PrimeField, const W: usize> {
     pub(crate) w: [Column<Advice>; W],
@@ -89,7 +86,7 @@ impl<F: PrimeField, const W: usize> LogupConfig<F, W> {
                 let w_helper: Expression<F> = w_helper
                     .iter()
                     .map(|w_helper| meta.query_advice(*w_helper, Rotation(0)))
-                    .sum();
+                    .sum::<Expression<F>>();
                 let t_helper = meta.query_advice(t_helper, Rotation(0));
 
                 // with the hope that deggree stays at 3

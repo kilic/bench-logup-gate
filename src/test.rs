@@ -1,7 +1,9 @@
-use crate::assignments::LogupGate;
-use ff::PrimeField;
-use halo2::circuit::floor_planner::V1;
-use halo2::circuit::Value;
+use crate::logup::assignments::LogupGate;
+use crate::subset::assignments::SubsetGate;
+use crate::LookupGate;
+use core::num;
+use ff::{FromUniformBytes, PrimeField};
+use halo2::circuit::{SimpleFloorPlanner, Value};
 use halo2::dev::MockProver;
 use halo2::{
     circuit::Layouter,
@@ -18,20 +20,23 @@ struct Params {
 }
 
 #[derive(Clone, Debug)]
-struct TestConfig<F: PrimeField + Ord, const W: usize> {
-    logup_gate: LogupGate<F, W>,
+struct TestConfig<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> {
+    gate: Gate,
+    _marker: PhantomData<F>,
 }
 
 #[derive(Debug, Default)]
-struct TestCircuit<F: PrimeField + Ord, const W: usize> {
-    _marker: PhantomData<F>,
+struct TestCircuit<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> {
+    _marker: PhantomData<(F, Gate)>,
     bit_size: usize,
     number_of_lookups: usize,
 }
 
-impl<F: PrimeField + Ord, const W: usize> Circuit<F> for TestCircuit<F, W> {
-    type Config = TestConfig<F, W>;
-    type FloorPlanner = V1;
+impl<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> Circuit<F>
+    for TestCircuit<F, Gate, W>
+{
+    type Config = TestConfig<F, Gate, W>;
+    type FloorPlanner = SimpleFloorPlanner;
     type Params = Params;
 
     fn without_witnesses(&self) -> Self {
@@ -43,8 +48,11 @@ impl<F: PrimeField + Ord, const W: usize> Circuit<F> for TestCircuit<F, W> {
     }
 
     fn configure_with_params(meta: &mut ConstraintSystem<F>, params: Self::Params) -> Self::Config {
-        let logup_gate = LogupGate::configure(meta, params.bit_size);
-        TestConfig { logup_gate }
+        let gate = Gate::configure(meta, params.bit_size);
+        TestConfig {
+            gate,
+            _marker: PhantomData,
+        }
     }
 
     fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
@@ -70,9 +78,9 @@ impl<F: PrimeField + Ord, const W: usize> Circuit<F> for TestCircuit<F, W> {
             })
             .collect::<Vec<_>>();
 
-        w.iter().for_each(|w| cfg.logup_gate.lookup(w));
+        w.iter().for_each(|w| cfg.gate.lookup(w));
 
-        cfg.logup_gate.layout(&mut ly)?;
+        cfg.gate.layout(&mut ly)?;
 
         Ok(())
     }
@@ -84,22 +92,110 @@ impl<F: PrimeField + Ord, const W: usize> Circuit<F> for TestCircuit<F, W> {
     }
 }
 
-#[test]
-fn test_logup() {
-    use halo2::halo2curves::pasta::Fq;
-    const K: usize = 4;
-    const W: usize = 10;
-    let bit_size = 3;
-
-    let circuit = TestCircuit::<Fq, W> {
+fn run_test_lookup<F: FromUniformBytes<64> + Ord, Gate: LookupGate<F, W>, const W: usize>(
+    k: u32,
+    bit_size: usize,
+    number_of_lookups: usize,
+) {
+    let circuit = TestCircuit::<F, Gate, W> {
         _marker: PhantomData,
         bit_size,
-        number_of_lookups: 9,
+        number_of_lookups,
     };
     let public_inputs = vec![];
-    let prover = match MockProver::run(K as u32, &circuit, public_inputs) {
+    let prover = match MockProver::run(k, &circuit, public_inputs) {
         Ok(prover) => prover,
         Err(e) => panic!("{:#?}", e),
     };
     prover.assert_satisfied();
+}
+
+#[test]
+fn test_lookup() {
+    use halo2::halo2curves::bn256::Fr;
+    run_test_lookup::<Fr, LogupGate<Fr, 10>, 10>(10, 5, 1 << 6);
+    run_test_lookup::<Fr, LogupGate<Fr, 10>, 10>(10, 5, 1 << 3);
+    run_test_lookup::<Fr, SubsetGate<Fr, 10>, 10>(10, 5, 1 << 6);
+    run_test_lookup::<Fr, SubsetGate<Fr, 10>, 10>(10, 5, 1 << 3);
+}
+
+mod prover {
+
+    use std::marker::PhantomData;
+
+    use ark_std::{end_timer, start_timer};
+    use halo2::halo2curves::bn256::{Bn256, Fr};
+    use halo2::plonk::{create_proof, keygen_pk, keygen_vk};
+    use halo2::poly::commitment::ParamsProver;
+    use halo2::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
+    use halo2::poly::kzg::multiopen::ProverSHPLONK;
+    use halo2::transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer};
+    use rand_core::OsRng;
+
+    use crate::logup::assignments::LogupGate;
+    use crate::subset::assignments::SubsetGate;
+    use crate::LookupGate;
+
+    use super::TestCircuit;
+
+    fn run_bench_prover<Gate: LookupGate<Fr, W>, const W: usize>(
+        desc: &str,
+        k: u32,
+        bit_size: usize,
+        number_of_lookups: usize,
+    ) {
+        let circuit = TestCircuit::<Fr, Gate, W> {
+            _marker: PhantomData,
+            bit_size,
+            number_of_lookups,
+        };
+
+        let params = read_srs(k);
+        let vk = keygen_vk(&params, &circuit).unwrap();
+        let pk = keygen_pk(&params, vk, &circuit).unwrap();
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+
+        let t0 = start_timer!(|| format!("{desc} prover"));
+        let proof = create_proof::<KZGCommitmentScheme<Bn256>, ProverSHPLONK<Bn256>, _, _, _, _>(
+            &params,
+            &pk,
+            &[circuit],
+            &[&[]],
+            OsRng,
+            &mut transcript,
+        );
+        end_timer!(t0);
+        proof.expect("proof generation should not fail");
+    }
+
+    #[test]
+    fn bench_prover() {
+        const W: usize = 4;
+        run_bench_prover::<SubsetGate<Fr, W>, W>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, W>, W>("logup", 17, 16, 1 << 15);
+    }
+
+    fn write_srs(k: u32) -> ParamsKZG<Bn256> {
+        let path = format!("srs_{k}.bin");
+        let params = ParamsKZG::<Bn256>::new(k);
+        params
+            .write_custom(
+                &mut std::fs::File::create(path).unwrap(),
+                halo2::SerdeFormat::RawBytesUnchecked,
+            )
+            .unwrap();
+        params
+    }
+
+    fn read_srs(k: u32) -> ParamsKZG<Bn256> {
+        let path = format!("srs_{k}.bin");
+        let file = std::fs::File::open(path.as_str());
+        match file {
+            Ok(mut file) => {
+                ParamsKZG::<Bn256>::read_custom(&mut file, halo2::SerdeFormat::RawBytesUnchecked)
+                    .unwrap()
+            }
+            Err(_) => write_srs(k),
+        }
+    }
 }

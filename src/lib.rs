@@ -1,15 +1,21 @@
-pub mod assignments;
-pub mod config;
+pub mod logup;
+pub mod subset;
 #[cfg(test)]
 pub mod test;
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use halo2::{
-    circuit::{AssignedCell, Cell, Region, Value},
-    plonk::{Advice, Any, Assigned, Column, Error, Fixed, Selector},
+    circuit::{AssignedCell, Cell, Layouter, Region, Value},
+    plonk::{Advice, Any, Assigned, Column, ConstraintSystem, Error, Fixed, Selector},
 };
 
 pub type AssignedValue<F> = AssignedCell<Assigned<F>, F>;
+
+pub trait LookupGate<F: PrimeField + Ord, const W: usize>: Clone {
+    fn configure(meta: &mut ConstraintSystem<F>, bit_size: usize) -> Self;
+    fn lookup(&mut self, value: &[Value<F>; W]);
+    fn layout(&self, ly: &mut impl Layouter<F>) -> Result<(), Error>;
+}
 
 #[derive(Debug)]
 pub struct RegionCtx<'a, F: Field> {

@@ -6,24 +6,20 @@ use halo2::{
     plonk::{Assigned, ConstraintSystem, Error},
 };
 
-use crate::{config::LogupConfig, RegionCtx};
+use crate::{LookupGate, RegionCtx};
 
-fn _debug_assigned<F: PrimeField>(desc: &str, e: &[Value<Assigned<F>>]) {
-    e.iter().enumerate().for_each(|(i, e)| {
-        e.map(|e| println!("{desc}_{i}: {:#?}", e.evaluate()));
-    });
-}
+use super::config::LogupConfig;
 
 #[derive(Clone, Debug)]
 pub struct LogupGate<F: PrimeField + Ord, const W: usize> {
-    pub cfg: LogupConfig<F, W>,
+    cfg: LogupConfig<F, W>,
     bit_size: usize,
     multiplicities: BTreeMap<F, usize>,
     witnesses: Vec<[Value<F>; W]>,
 }
 
-impl<F: PrimeField + Ord, const W: usize> LogupGate<F, W> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, bit_size: usize) -> Self {
+impl<F: PrimeField + Ord, const W: usize> LookupGate<F, W> for LogupGate<F, W> {
+    fn configure(meta: &mut ConstraintSystem<F>, bit_size: usize) -> Self {
         let w = std::iter::repeat_with(|| meta.advice_column())
             .take(W)
             .collect::<Vec<_>>()
@@ -40,7 +36,7 @@ impl<F: PrimeField + Ord, const W: usize> LogupGate<F, W> {
         }
     }
 
-    pub fn lookup(&mut self, value: &[Value<F>; W]) {
+    fn lookup(&mut self, value: &[Value<F>; W]) {
         self.witnesses.push(*value);
         value.iter().for_each(|value| {
             value.map(|value| {
@@ -52,11 +48,7 @@ impl<F: PrimeField + Ord, const W: usize> LogupGate<F, W> {
         });
     }
 
-    pub fn layout(
-        &self,
-        ly: &mut impl Layouter<F>,
-        // ) -> Result<Vec<Value<Assigned<F>>>, Error> {
-    ) -> Result<(), Error> {
+    fn layout(&self, ly: &mut impl Layouter<F>) -> Result<(), Error> {
         let alpha: Value<F> = ly.get_challenge(self.cfg.alpha);
 
         let table = (0..1 << self.bit_size).map(F::from).collect::<Vec<_>>();
