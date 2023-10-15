@@ -1,6 +1,7 @@
 pub mod assignments;
 pub mod config;
-pub mod toy;
+#[cfg(test)]
+pub mod test;
 
 use ff::Field;
 use halo2::{
