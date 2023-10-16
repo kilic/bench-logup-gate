@@ -29,7 +29,7 @@ struct TestConfig<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> {
 struct TestCircuit<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> {
     _marker: PhantomData<(F, Gate)>,
     bit_size: usize,
-    number_of_lookups: usize,
+    lookups_per_column: usize,
 }
 
 impl<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> Circuit<F>
@@ -42,7 +42,7 @@ impl<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> Circuit<F>
     fn without_witnesses(&self) -> Self {
         Self {
             bit_size: self.bit_size,
-            number_of_lookups: self.number_of_lookups,
+            lookups_per_column: self.lookups_per_column,
             _marker: PhantomData,
         }
     }
@@ -62,7 +62,7 @@ impl<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> Circuit<F>
     fn synthesize(&self, mut cfg: Self::Config, mut ly: impl Layouter<F>) -> Result<(), Error> {
         let table_size = 1 << self.bit_size;
 
-        let w = (0..self.number_of_lookups as u64)
+        let w = (0..self.lookups_per_column as u64)
             .map(|_| {
                 //
                 let w: [Value<F>; W] = std::iter::repeat_with(|| {
@@ -95,12 +95,12 @@ impl<F: PrimeField + Ord, Gate: LookupGate<F, W>, const W: usize> Circuit<F>
 fn run_test_lookup<F: FromUniformBytes<64> + Ord, Gate: LookupGate<F, W>, const W: usize>(
     k: u32,
     bit_size: usize,
-    number_of_lookups: usize,
+    lookups_per_column: usize,
 ) {
     let circuit = TestCircuit::<F, Gate, W> {
         _marker: PhantomData,
         bit_size,
-        number_of_lookups,
+        lookups_per_column,
     };
     let public_inputs = vec![];
     let prover = match MockProver::run(k, &circuit, public_inputs) {
@@ -142,18 +142,23 @@ mod prover {
         desc: &str,
         k: u32,
         bit_size: usize,
-        number_of_lookups: usize,
+        lookups_per_column: usize,
     ) {
         let circuit = TestCircuit::<Fr, Gate, W> {
             _marker: PhantomData,
             bit_size,
-            number_of_lookups,
+            lookups_per_column,
         };
 
         let params = read_srs(k);
         let vk = keygen_vk(&params, &circuit).unwrap();
         let pk = keygen_pk(&params, vk, &circuit).unwrap();
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+
+        let desc = format!(
+            "{desc}, k: {k}, W: {W}, b: {bit_size}, l: {lookups_per_column}, n: {}",
+            lookups_per_column * W
+        );
 
         let t0 = start_timer!(|| format!("{desc} prover"));
         let proof = create_proof::<KZGCommitmentScheme<Bn256>, ProverSHPLONK<Bn256>, _, _, _, _>(
@@ -170,9 +175,27 @@ mod prover {
 
     #[test]
     fn bench_prover() {
-        const W: usize = 4;
-        run_bench_prover::<SubsetGate<Fr, W>, W>("subset", 17, 16, 1 << 15);
-        run_bench_prover::<LogupGate<Fr, W>, W>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 1>, 1>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 2>, 2>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 3>, 3>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 4>, 4>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 5>, 5>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 6>, 6>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 7>, 7>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 8>, 8>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 9>, 9>("subset", 17, 16, 1 << 15);
+        run_bench_prover::<SubsetGate<Fr, 10>, 10>("subset", 17, 16, 1 << 15);
+
+        run_bench_prover::<LogupGate<Fr, 1>, 1>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 2>, 2>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 3>, 3>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 4>, 4>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 5>, 5>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 6>, 6>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 7>, 7>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 8>, 8>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 9>, 9>("logup", 17, 16, 1 << 15);
+        run_bench_prover::<LogupGate<Fr, 10>, 10>("logup", 17, 16, 1 << 15);
     }
 
     fn write_srs(k: u32) -> ParamsKZG<Bn256> {
